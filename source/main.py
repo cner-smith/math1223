@@ -1,60 +1,167 @@
 import requests
-import pandas as pd
+import json
+import csv
 
-# Replace 'YOUR_ACCESS_TOKEN', 'BOSS_ID', and 'DIFFICULTY' with your data
-access_token = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiI5YTgwZTY2Yy1mNTBlLTRiZDEtOTEyOC01NzYwYzczODRmOWQiLCJqdGkiOiI5OTliMGNlM2VmZjlmMmY0MjgyN2JlMWNlM2IzYjI0YWIyZTdmNTA0MDExMGQ2ZTJlYTY2YjZiZjRkMzg1MTViYWJiYzMyZjBlMGZkNjNmMyIsImlhdCI6MTY5ODc4NjE2OS4yOTA1NTksIm5iZiI6MTY5ODc4NjE2OS4yOTA1NjEsImV4cCI6MTcyOTg5MDE2OS4yNTYyNzUsInN1YiI6IjI5MTk2NSIsInNjb3BlcyI6WyJ2aWV3LXVzZXItcHJvZmlsZSIsInZpZXctcHJpdmF0ZS1yZXBvcnRzIl19.rHM4eYRNK-Rc0c3igWHv0rP7F4m5Q0mfUk8txtvjwWLKh7obK_g73NmfaBkfQJP2ffQTb37wHlgvoVFc_LxcdK7iUyxQjW1sQqlFBwD709bzH_h2SPyadZZH1fwpXCW9VQ3wtWA_LAAr4Wb-xlasYSH_z9-ZKUEfkfWZklD3nUOpcjeebbgeNB4rdeDniDKGM0yTth7WsKzyEtNZeJJaZQFwgp61FrCiYDjbNcdqpon58Kb8Hi9NDAofwJ0CmS4BtCbdBISWzStclwdKJJkesxw0Iysrn7_qPvAf9kQ16yjwnrE1BaavPrc0tI_8pAuJUmX_2nxWP79Ygwh-znokyMMXyFofkyE3oQtrxiCnIzOsF54FfIAwN-mgL0xewjWghzQ_ZWg1nAuj59xxkglShPx0EYfgSFvjU12ktlVuOHWn7NNLMKBtcaHl91w3TwWyDFeCu7wHDODSoViFF5x5g2bbWPZXsLd1XsZ4jfO_QfHTfgG5BCRQxyTT8sFs7OBlPF0rKRiC_rKO-TDhgsuANlCJ2tUXLmBie6jZ6ZwDnkMM5BEPqHi0nxdq6ZjwRVPZUwexv3vC-V4tqdFSgDznoltVjb-3yTvzs7BnL6ks0sSLHbB__tITi-yHVupFgZBv7hsjoyqjZ9HpY6et8lT8dKnPBtBDphfA-MpLAW63c-E'
-boss_id = '2685'  # The ID of the boss you're interested in
-difficulty = 'mythic'  # Specify difficulty (e.g., 'normal', 'heroic', 'mythic')
+def match_name_and_source_id(player_data, source_id):
+    """Matches the name of a player with their sourceID.
 
-# URL for fetching reports
-url = f'https://www.warcraftlogs.com:443/v1/reports/guild/GUILD_NAME/Boss/{boss_id}?api_key={access_token}&difficulty={difficulty}'
+    Args:
+        player_data: A list of player data, including the player's name, code, and fightID.
+        source_id: The player's sourceID.
 
-# Make a GET request to the API
-response = requests.get(url)
+    Returns:
+        The player's name.
+    """
 
-if response.status_code == 200:  # Check if the request was successful
-    reports_data = response.json()  # Parse JSON data
+    for player in player_data:
+        if player["name"] == source_id:
+            return player["name"]
 
-    # Extract the top 100 holy priests from the reports (assuming 'class' represents the class information)
-    holy_priests = [report for report in reports_data if report['spec'] == 'Holy Priest'][:100]
+    return None
 
-    # Iterate over the top 100 holy priests' reports
-    for priest in holy_priests:
-        report_id = priest['id']  # Extract the report ID
+def export_player_data(fight_id, code, source_id):
+    """Exports the player's data to a CSV file.
 
-        # Make a request to fetch detailed information for the report
-        report_url = f'https://www.warcraftlogs.com:443/v1/report/fights/{report_id}?api_key={access_token}'
-        report_response = requests.get(report_url)
+    Args:
+        fight_id: The fightID of the encounter.
+        code: The player's code.
+        source_id: The player's sourceID.
+    """
 
-        if report_response.status_code == 200:
-            detailed_report_data = report_response.json()
+    access_token = OAuth2Client(
+        client_id="9a80e66c-f50e-4bd1-9128-5760c7384f9d",
+        client_secret="n8RTGEGFrbxGl4SxoNR4NjWBeje96QYap8TH12Jb",
+        authorization_url="https://www.warcraftlogs.com/oauth/authorize",
+        access_token_url="https://www.warcraftlogs.com/oauth/token"
+    ).get_access_token()
 
-            # Extracting summary data of character, gear, stats, talents, etc.
-            character_summary = detailed_report_data.get('friendlies')
-            healing_summary = detailed_report_data.get('healing')
-            healing_breakdown = detailed_report_data.get('phases')  # Check the specific structure for spell breakdown
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = requests.post(
+        GRAPHQL_ENDPOINT,
+        headers=headers,
+        json={"query": GET_PLAYER_DATA_QUERY.format(code=code, fightID=fight_id, sourceID=source_id)}
+    )
 
-            # Create a Pandas DataFrame for character summary data
-            character_df = pd.DataFrame(character_summary)
-            
-            # Create a separate sheet for character summary in the CSV file
-            character_filename = f"{priest['name']}_character_summary.csv"
-            character_df.to_csv(character_filename, index=False)
-            
-            # Create a Pandas DataFrame for overall healing summary data
-            healing_df = pd.DataFrame(healing_summary)
-            
-            # Create a separate sheet for overall healing summary in the CSV file
-            healing_filename = f"{priest['name']}_healing_summary.csv"
-            healing_df.to_csv(healing_filename, index=False)
-            
-            # Create a Pandas DataFrame for healing breakdown data
-            breakdown_df = pd.DataFrame(healing_breakdown)  # Adjust this based on the actual breakdown structure
-            
-            # Create a separate sheet for healing breakdown in the CSV file
-            breakdown_filename = f"{priest['name']}_healing_breakdown.csv"
-            breakdown_df.to_csv(breakdown_filename, index=False)
-        else:
-            print(f"Failed to fetch data for priest: {priest['name']}. Status code:", report_response.status_code)
-else:
-    print("Failed to fetch data from the API. Status code:", response.status_code)
+    player_data = json.loads(response.content)["data"]["reportData"]["report"]["table"]
+
+    with open(f"{code}.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(player_data.keys())
+        for row in player_data.values():
+            writer.writerow(row)
+
+class OAuth2Client:
+    def __init__(self, client_id, client_secret, authorization_url, access_token_url):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.authorization_url = authorization_url
+        self.access_token_url = access_token_url
+        self.access_token = None
+
+    def get_access_token(self):
+        if self.access_token is None:
+            response = requests.post(
+                self.access_token_url,
+                auth=(self.client_id, self.client_secret),
+                data={"grant_type": "client_credentials"}
+            )
+
+            access_token = json.loads(response.content)["access_token"]
+            self.access_token = access_token
+
+        return self.access_token
+
+    def send_graphql_query(self, query):
+        headers = {
+            "Authorization": f"Bearer {self.get_access_token()}"
+        }
+
+        response = requests.post(
+            GRAPHQL_ENDPOINT,
+            headers=headers,
+            json={"query": query}
+        )
+
+        return response.json()
+
+# Create an OAuth2 client
+oauth2_client = OAuth2Client(
+    client_id="9a80e66c-f50e-4bd1-9128-5760c7384f9d",
+    client_secret="n8RTGEGFrbxGl4SxoNR4NjWBeje96QYap8TH12Jb",
+    authorization_url="https://www.warcraftlogs.com/oauth/authorize",
+    access_token_url="https://www.warcraftlogs.com/oauth/token"
+)
+
+# Set the GraphQL endpoint
+GRAPHQL_ENDPOINT = "https://www.warcraftlogs.com/api/v2/client"
+
+# Define the GraphQL queries
+GET_TOP_PRIESTS_QUERY = """
+query request {
+   worldData{
+       encounter(id:2685){
+           characterRankings(
+               metric: hps,
+               className: "Priest"
+               specName: "Holy"
+
+           )
+       }
+   }
+}
+"""
+
+GET_SOURCE_ID_QUERY = """
+query request {
+   reportData {
+         report(code:"{code}") {
+            table(fightIDs:{fightID})
+         }
+      }
+}
+"""
+
+GET_PLAYER_DATA_QUERY = """
+query request {
+   reportData {
+         report(code:"{code}") {
+            table(fightIDs:{fightID},sourceID:{sourceID})
+         }
+      }
+}
+"""
+
+# Get the top 100 priests
+headers = {"Authorization": f"Bearer {access_token}"}
+response = requests.post(GRAPHQL_ENDPOINT, headers=headers, json={"query": GET_TOP_PRIESTS_QUERY})
+top_priests = json.loads(response.content)["data"]["worldData"]["encounter"]["characterRankings"]
+
+# Create a list to store the player data
+player_data = []
+
+# Iterate over the top 100 priests and get the source ID for each one
+for priest in top_priests[:100]:
+    code = priest["code"]
+    fight_id = priest["fightID"]
+    name = priest["name"]
+
+    # Get the source ID for the player
+    response = requests.post(GRAPHQL_ENDPOINT, headers=headers, json={"query": GET_SOURCE_ID_QUERY.format(code=code, fightID=fight_id)})
+    source_id = json.loads(response.content)["data"]["reportData"]["report"]["table"]["sourceID"]
+
+    # Add the player data to the list
+    player_data.append({
+        "code": code,
+        "fight_id": fight_id,
+        "name": name,
+        "source_id": source_id
+    })
+
+# Match the name and sourceID for each player
+for player in player_data:
+    source_id = match_name_and_source_id(player_data, player["code"])
+    player["source_id"] = source_id
+
+# Export the player data to a CSV file for each player
+for player in player_data:
+    export_player_data(player["fight_id"], player["code"], player["source_id"])
