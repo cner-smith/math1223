@@ -2,53 +2,57 @@ import requests
 import json
 import csv
 
-def match_name_and_source_id(player_data, source_id):
-    """Matches the name of a player with their sourceID.
-
-    Args:
-        player_data: A list of player data, including the player's name, code, and fightID.
-        source_id: The player's sourceID.
-
-    Returns:
-        The player's name.
-    """
-
-    for player in player_data:
-        if player["name"] == source_id:
-            return player["name"]
-
-    return None
-
-def export_player_data(fight_id, code, source_id):
-    """Exports the player's data to a CSV file.
-
-    Args:
-        fight_id: The fightID of the encounter.
-        code: The player's code.
-        source_id: The player's sourceID.
-    """
-
-    access_token = OAuth2Client(
-        client_id="9a80e66c-f50e-4bd1-9128-5760c7384f9d",
-        client_secret="n8RTGEGFrbxGl4SxoNR4NjWBeje96QYap8TH12Jb",
-        authorization_url="https://www.warcraftlogs.com/oauth/authorize",
-        access_token_url="https://www.warcraftlogs.com/oauth/token"
-    ).get_access_token()
-
-    headers = {"Authorization": f"Bearer {access_token}"}
+def get_source_id(code, fight_id, access_token, name):
+    # Get the source ID for the player
     response = requests.post(
         GRAPHQL_ENDPOINT,
-        headers=headers,
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"query": GET_SOURCE_ID_QUERY.format(code=code, fightID=fight_id)}
+    )
+    
+    if response.status_code == 200:
+        source_data = json.loads(response.content)
+        if 'data' in source_data and 'reportData' in source_data['data'] and 'report' in source_data['data']['reportData']:
+            data = source_data['data']['reportData']['report']['table']['data']
+            if 'composition' in data:
+                # Loop through the composition to find the matching name
+                for entry in data['composition']:
+                    if entry['name'] == name:
+                        return entry['name'], entry['id']
+                print(f"No matching player found for {name}")
+            else:
+                print("No 'composition' data in the response.")
+        else:
+            print("Unexpected response structure - missing specific data attributes")
+    else:
+        print("Request failed with status code:", response.status_code)
+
+    return None, None  # Return None if data retrieval fails
+
+def export_player_data(fight_id, code, source_id, access_token):
+    # Export the player's data to a CSV file
+    response = requests.post(
+        GRAPHQL_ENDPOINT,
+        headers={"Authorization": f"Bearer {access_token}"},
         json={"query": GET_PLAYER_DATA_QUERY.format(code=code, fightID=fight_id, sourceID=source_id)}
     )
+    player_data_response = json.loads(response.content)
+    print(player_data_response)
 
-    player_data = json.loads(response.content)["data"]["reportData"]["report"]["table"]
+    if "data" in player_data_response:
+        player_data = player_data_response["data"]["reportData"]["report"]["table"]["data"]
 
-    with open(f"{code}.csv", "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(player_data.keys())
-        for row in player_data.values():
-            writer.writerow(row)
+        if isinstance(player_data, list) and player_data:  # Check if player_data is a non-empty list
+            with open(f"{code}.csv", "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(player_data[0].keys())  # Write header row
+
+                for row in player_data:
+                    writer.writerow(row.values())  # Write data rows
+        else:
+            print("Player data is empty or not in the expected format.")
+    else:
+        print("No 'data' attribute found in the player data response.")
 
 class OAuth2Client:
     def __init__(self, client_id, client_secret, authorization_url, access_token_url):
@@ -98,70 +102,80 @@ GRAPHQL_ENDPOINT = "https://www.warcraftlogs.com/api/v2/client"
 # Define the GraphQL queries
 GET_TOP_PRIESTS_QUERY = """
 query request {
-   worldData{
-       encounter(id:2685){
-           characterRankings(
-               metric: hps,
-               className: "Priest"
-               specName: "Holy"
+    worldData{
+        encounter(id:2685){
+            characterRankings(
+                metric: hps,
+                className: "Priest"
+                specName: "Holy"
 
-           )
-       }
-   }
+            )
+        }
+    }
 }
 """
 
 GET_SOURCE_ID_QUERY = """
-query request {
-   reportData {
-         report(code:"{code}") {
-            table(fightIDs:{fightID})
-         }
-      }
-}
+query request {{
+    reportData {{
+        report(code:"{code}") {{
+            table(fightIDs:{fightID})
+        }}
+    }}
+}}
 """
 
 GET_PLAYER_DATA_QUERY = """
-query request {
-   reportData {
-         report(code:"{code}") {
-            table(fightIDs:{fightID},sourceID:{sourceID})
-         }
-      }
-}
+query request {{
+    reportData {{
+        report(code:"{code}") {{
+            table(fightIDs:{fightID}, sourceID:{sourceID})
+        }}
+    }}
+}}
 """
 
 # Get the top 100 priests
-headers = {"Authorization": f"Bearer {access_token}"}
-response = requests.post(GRAPHQL_ENDPOINT, headers=headers, json={"query": GET_TOP_PRIESTS_QUERY})
-top_priests = json.loads(response.content)["data"]["worldData"]["encounter"]["characterRankings"]
+access_token = oauth2_client.get_access_token()
+response = requests.post(GRAPHQL_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"}, json={"query": GET_TOP_PRIESTS_QUERY})
+top_priests_response = json.loads(response.content)
 
-# Create a list to store the player data
-player_data = []
 
-# Iterate over the top 100 priests and get the source ID for each one
-for priest in top_priests[:100]:
-    code = priest["code"]
-    fight_id = priest["fightID"]
-    name = priest["name"]
+if 'data' in top_priests_response:
+    world_data = top_priests_response['data']['worldData']
+    encounter_data = world_data['encounter']
+    character_rankings = encounter_data['characterRankings']
+    priest_rankings = character_rankings['rankings']
 
-    # Get the source ID for the player
-    response = requests.post(GRAPHQL_ENDPOINT, headers=headers, json={"query": GET_SOURCE_ID_QUERY.format(code=code, fightID=fight_id)})
-    source_id = json.loads(response.content)["data"]["reportData"]["report"]["table"]["sourceID"]
+    player_data = []
 
-    # Add the player data to the list
-    player_data.append({
-        "code": code,
-        "fight_id": fight_id,
-        "name": name,
-        "source_id": source_id
-    })
+    for entry in priest_rankings:
+        # Process each priest in some way, extracting required information
+        code = entry["report"]["code"]
+        fight_id = entry["report"]["fightID"]
+        name = entry["name"]
 
-# Match the name and sourceID for each player
-for player in player_data:
-    source_id = match_name_and_source_id(player_data, player["code"])
-    player["source_id"] = source_id
+        # Get the source ID for the player
+        source_id = get_source_id(code, fight_id, access_token, name)
 
-# Export the player data to a CSV file for each player
-for player in player_data:
-    export_player_data(player["fight_id"], player["code"], player["source_id"])
+        # Add the player data to the list
+        player_data.append({
+            "code": code,
+            "fight_id": fight_id,
+            "name": name,
+            "source_id": source_id
+        })
+
+    # Match the name and sourceID for each player
+    for entry in player_data:
+        name, source_id = get_source_id(entry["code"], entry["fight_id"], access_token, entry["name"])
+
+        if name is not None and source_id is not None:
+            entry["source_id"] = source_id
+        else:
+            # Handle cases where the name or source ID is not found
+            print(f"Failed to retrieve source ID for {entry['code']}")
+
+    # Export the player data to a CSV file for each player
+    for entry in player_data:
+        export_player_data(entry["fight_id"], entry["code"], entry["source_id"], access_token)
