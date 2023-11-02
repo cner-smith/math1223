@@ -1,9 +1,9 @@
 import requests
 import json
 import csv
+from datetime import timedelta
 
 def get_source_id(code, fight_id, access_token, name):
-    # Get the source ID for the player
     response = requests.post(
         GRAPHQL_ENDPOINT,
         headers={"Authorization": f"Bearer {access_token}"},
@@ -12,22 +12,27 @@ def get_source_id(code, fight_id, access_token, name):
     
     if response.status_code == 200:
         source_data = json.loads(response.content)
-        if 'data' in source_data and 'reportData' in source_data['data'] and 'report' in source_data['data']['reportData']:
-            data = source_data['data']['reportData']['report']['table']['data']
-            if 'composition' in data:
-                # Loop through the composition to find the matching name
-                for entry in data['composition']:
-                    if entry['name'] == name:
-                        return entry['name'], entry['id']
-                print(f"No matching player found for {name}")
+        print("Source Data:", source_data)
+        try:
+            if 'data' in source_data and 'reportData' in source_data['data'] and 'report' in source_data['data']['reportData']:
+                data = source_data['data']['reportData']['report']['table']['data']
+                if 'composition' in data:
+                    for entry in data['composition']:
+                        if entry['name'] == name:
+                            return entry['name'], entry['id']
+                    print(f"No matching player found for {name}")
+                else:
+                    print("No 'composition' data in the response.")
             else:
-                print("No 'composition' data in the response.")
-        else:
-            print("Unexpected response structure - missing specific data attributes")
+                print("Unexpected response structure - missing specific data attributes")
+        except Exception as e:
+            print("Exception:", e)
+            print("Data:", source_data)
+            raise
     else:
         print("Request failed with status code:", response.status_code)
 
-    return None, None  # Return None if data retrieval fails
+    return None, None # Return None if data retrieval fails
 
 def export_player_data(fight_id, code, source_id, access_token):
     # Export the player's data to a CSV file
@@ -50,6 +55,39 @@ def export_player_data(fight_id, code, source_id, access_token):
             print("Player data is empty or not in the expected format.")
     else:
         print("No 'data' attribute found in the player data response.")
+
+def modify_healing_done_data(healing_data):
+    modified_healing_data = []
+    for entry in healing_data:
+        # Append each ability's healing and its amount as a separate row
+        modified_healing_data.append({'ability': entry['name'], 'healing_amount': entry['total']})
+    return modified_healing_data
+
+def process_data_and_export(name, data):
+    # Extract and modify the required data
+    total_time = str(timedelta(milliseconds=data['totalTime'])).split(", ")[-1]  # Convert milliseconds to a readable time format
+
+    combatant_info = data['combatantInfo']
+    combatant_stats = combatant_info['stats']
+    del combatant_info['talents']  # Remove unwanted information after 'talents'
+
+    healers_count = sum(1 for player in data['composition'] if 'healer' in player['specs'][0]['role'].lower())
+
+    modified_healing_data = modify_healing_done_data(data['healingDone'])
+
+    # Write the modified data to a new CSV file named after the player's name
+    with open(f"{name}_modified.csv", "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=['total_time', 'combatant_info', 'healers_count', 'healing_done'])
+        writer.writeheader()
+
+        writer.writerow({'total_time': total_time, 'combatant_info': combatant_info, 'healers_count': healers_count, 'healing_done': None})
+
+        # Write combatant_stats as a separate row
+        writer.writerow({'total_time': None, 'combatant_info': json.dumps(combatant_stats), 'healers_count': None, 'healing_done': None})
+
+        # Write modified healing data as separate rows
+        for entry in modified_healing_data:
+            writer.writerow({'total_time': None, 'combatant_info': None, 'healers_count': None, 'healing_done': json.dumps(entry)})
 
 class OAuth2Client:
     def __init__(self, client_id, client_secret, authorization_url, access_token_url):
@@ -176,3 +214,12 @@ if 'data' in top_priests_response:
     # Export the player data to a CSV file for each player
     for entry in player_data:
         export_player_data(entry["fight_id"], entry["code"], entry["source_id"], access_token)
+
+    # Loop through each player's data and process it
+    for entry in player_data:
+        report_data_response = get_source_id(entry["fight_id"], entry["code"], entry["source_id"], access_token)
+        if "data" in report_data_response:
+            report_data = report_data_response["data"]["reportData"]["report"]["table"]
+            process_data_and_export(entry["name"], report_data) # Pass player's name to function
+        else:
+            print("No 'data' attribute found in the player data response.")
