@@ -1,60 +1,61 @@
 import requests
 import json
 import csv
+import logging
+import datetime
 from datetime import timedelta
 
-def get_source_id(code, fight_id, access_token, name):
-    response = requests.post(
-        GRAPHQL_ENDPOINT,
-        headers={"Authorization": f"Bearer {access_token}"},
-        json={"query": GET_SOURCE_ID_QUERY.format(code=code, fightID=fight_id)}
-    )
+logging.basicConfig(level=logging.ERROR)
+
+
+def get_source_id(code, fight_id, name):
+    query = GET_SOURCE_ID_QUERY.format(code=code, fightID=fight_id)
+    response = oauth2_client.make_request(GRAPHQL_ENDPOINT, query)
     
     if response.status_code == 200:
         source_data = json.loads(response.content)
-        print("Source Data:", source_data)
         try:
-            if 'data' in source_data and 'reportData' in source_data['data'] and 'report' in source_data['data']['reportData']:
-                data = source_data['data']['reportData']['report']['table']['data']
-                if 'composition' in data:
-                    for entry in data['composition']:
-                        if entry['name'] == name:
-                            return entry['name'], entry['id']
-                    print(f"No matching player found for {name}")
-                else:
-                    print("No 'composition' data in the response.")
+            data_keys = source_data.get('data', {}).get('reportData', {}).get('report', {}).get('table', {}).get('data', {})
+            if 'composition' in data_keys:
+                for entry in data_keys['composition']:
+                    if entry['name'] == name:
+                        return entry['id']
+                logging.error(f"No matching player found for {name}")
+                return None  # Return None if player not found
             else:
-                print("Unexpected response structure - missing specific data attributes")
+                logging.error(f"No 'composition' data in the response.")
         except Exception as e:
-            print("Exception:", e)
-            print("Data:", source_data)
+            logging.error(f"Exception: {e}")
+            logging.error(f"Data: {source_data}")
             raise
     else:
-        print("Request failed with status code:", response.status_code)
+        logging.error(f"Request failed with status code: {response.status_code}")
 
-    return None, None # Return None if data retrieval fails
+    return None  # Return None if data retrieval fails
 
-def export_player_data(fight_id, code, source_id, access_token):
+def export_player_data(fight_id, code, source_id):
     # Export the player's data to a CSV file
-    response = requests.post(
-        GRAPHQL_ENDPOINT,
-        headers={"Authorization": f"Bearer {access_token}"},
-        json={"query": GET_PLAYER_DATA_QUERY.format(code=code, fightID=fight_id, sourceID=source_id)}
-    )
-    player_data_response = json.loads(response.content)
+    query = GET_PLAYER_DATA_QUERY.format(code=code, fightID=fight_id, sourceID=source_id)
+    response = oauth2_client.make_request(GRAPHQL_ENDPOINT, query)  # Using the OAuth2Client method
+    player_data_response = response.content
+    
+    if player_data_response:
+        try:
+            player_data = json.loads(player_data_response)
 
-    if "data" in player_data_response:
-        player_data = player_data_response["data"]["reportData"]["report"]["table"]["data"]
+            if isinstance(player_data, dict) and player_data:  # Check if player_data is a non-empty dictionary
+                with open(f"{code}.csv", "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(player_data.keys())  # Write header row
+                    writer.writerow(player_data.values())  # Write data rows
+            else:
+                logging.error(f"Player data is empty or not in the expected format.")
 
-        if isinstance(player_data, dict) and player_data:  # Check if player_data is a non-empty dictionary
-            with open(f"{code}.csv", "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(player_data.keys())  # Write header row
-                writer.writerow(player_data.values())  # Write data rows
-        else:
-            print("Player data is empty or not in the expected format.")
+        except json.decoder.JSONDecodeError as e:
+            logging.error(f"Error decoding JSON: {e}")
+
     else:
-        print("No 'data' attribute found in the player data response.")
+        logging.error(f"No 'data' attribute found in the player data response.")
 
 def modify_healing_done_data(healing_data):
     modified_healing_data = []
@@ -63,31 +64,57 @@ def modify_healing_done_data(healing_data):
         modified_healing_data.append({'ability': entry['name'], 'healing_amount': entry['total']})
     return modified_healing_data
 
+def modify_combatant_info_data(combatant_info):
+    modified_combatant_info = []
+    for key, value in combatant_info.items():
+        modified_combatant_info.append({'info_key': key, 'info_value': value})
+    return modified_combatant_info
+
+
 def process_data_and_export(name, data):
     # Extract and modify the required data
-    total_time = str(timedelta(milliseconds=data['totalTime'])).split(", ")[-1]  # Convert milliseconds to a readable time format
+    
+    total_time = str(timedelta(milliseconds=data.get('totalTime', 0))).split(", ")[-1]  # Convert milliseconds to a readable time format
 
-    combatant_info = data['combatantInfo']
-    combatant_stats = combatant_info['stats']
-    del combatant_info['talents']  # Remove unwanted information after 'talents'
+    combatant_info = data.get('combatantInfo', {})
+    combatant_info.pop('talents', None)  # Remove unwanted information after 'talents'
 
-    healers_count = sum(1 for player in data['composition'] if 'healer' in player['specs'][0]['role'].lower())
+    healers_count = sum(1 for player in data.get('composition', []) if player.get('specs') and 'healer' in player['specs'][0].get('role', '').lower())
 
-    modified_healing_data = modify_healing_done_data(data['healingDone'])
+    modified_healing_data = modify_healing_done_data(data.get('healingDone', []))
+    modified_combatant_info_data = modify_combatant_info_data(combatant_info)
+
 
     # Write the modified data to a new CSV file named after the player's name
     with open(f"{name}_modified.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=['total_time', 'combatant_info', 'healers_count', 'healing_done'])
         writer.writeheader()
 
-        writer.writerow({'total_time': total_time, 'combatant_info': combatant_info, 'healers_count': healers_count, 'healing_done': None})
-
-        # Write combatant_stats as a separate row
-        writer.writerow({'total_time': None, 'combatant_info': json.dumps(combatant_stats), 'healers_count': None, 'healing_done': None})
+        # Write the extracted data to the CSV file
+        writer.writerow({
+            'total_time': total_time,
+            'combatant_info': json.dumps(combatant_info),
+            'healers_count': healers_count,
+            'healing_done': None  # Currently empty; will be written in the subsequent loop
+        })
 
         # Write modified healing data as separate rows
         for entry in modified_healing_data:
-            writer.writerow({'total_time': None, 'combatant_info': None, 'healers_count': None, 'healing_done': json.dumps(entry)})
+            writer.writerow({
+                'total_time': None,
+                'combatant_info': None,
+                'healers_count': None,
+                'healing_done': json.dumps(entry)
+            })
+
+        # Write modified combatant info data as separate rows
+        for entry in modified_combatant_info_data:
+            writer.writerow({
+                'total_time': None,
+                'combatant_info': json.dumps(entry),
+                'healers_count': None,
+                'healing_done': None
+            })
 
 class OAuth2Client:
     def __init__(self, client_id, client_secret, authorization_url, access_token_url):
@@ -96,32 +123,35 @@ class OAuth2Client:
         self.authorization_url = authorization_url
         self.access_token_url = access_token_url
         self.access_token = None
+        self.token_expiry = None
+        self.get_access_token()
 
     def get_access_token(self):
-        if self.access_token is None:
-            response = requests.post(
-                self.access_token_url,
-                auth=(self.client_id, self.client_secret),
-                data={"grant_type": "client_credentials"}
-            )
-
-            access_token = json.loads(response.content)["access_token"]
-            self.access_token = access_token
-
-        return self.access_token
-
-    def send_graphql_query(self, query):
-        headers = {
-            "Authorization": f"Bearer {self.get_access_token()}"
-        }
-
+        if hasattr(self, 'access_token') and self.access_token and hasattr(self, 'token_expiry') and self.token_expiry and datetime.datetime.now() < self.token_expiry:
+            return self.access_token
+        
         response = requests.post(
-            GRAPHQL_ENDPOINT,
-            headers=headers,
-            json={"query": query}
+            self.access_token_url,
+            data={"grant_type": "client_credentials"},
+            auth=(self.client_id, self.client_secret)
         )
+        if response.status_code == 200:
+            data = response.json()
+            self.access_token = data.get("access_token")
+            # Assuming token expires in 1 hour for caching purposes.
+            self.token_expiry = datetime.datetime.now() + datetime.timedelta(hours=1)
+            return self.access_token
+        else:
+            logging.error(f"Failed to obtain access token.")
+            return None
 
-        return response.json()
+
+    def make_request(self, url, query=''):
+        headers = {
+            "Authorization": f"Bearer {self.access_token}"
+        }
+        response = requests.post(url, headers=headers, json={"query": query})
+        return response
 
 # Create an OAuth2 client
 oauth2_client = OAuth2Client(
@@ -170,56 +200,60 @@ query request {{
 }}
 """
 
-# Get the top 100 priests
-access_token = oauth2_client.get_access_token()
-response = requests.post(GRAPHQL_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"}, json={"query": GET_TOP_PRIESTS_QUERY})
-top_priests_response = json.loads(response.content)
+def main():
+    access_token = oauth2_client.get_access_token()
 
+    if not access_token:
+        logging.error(f"No access token obtained. Cannot make the request.")
+        return
 
-if 'data' in top_priests_response:
-    world_data = top_priests_response['data']['worldData']
-    encounter_data = world_data['encounter']
-    character_rankings = encounter_data['characterRankings']
-    priest_rankings = character_rankings['rankings']
+    response = oauth2_client.make_request(GRAPHQL_ENDPOINT, GET_TOP_PRIESTS_QUERY)
 
-    player_data = []
+    if response.status_code != 200:
+        logging.error(f"Request for top priests data failed with status code: {response.status_code}")
+        return
 
-    for entry in priest_rankings:
-        # Process each priest in some way, extracting required information
-        code = entry["report"]["code"]
-        fight_id = entry["report"]["fightID"]
-        name = entry["name"]
+    top_priests_response = response.json()
+    
+    if 'data' in top_priests_response:
+        priest_rankings = top_priests_response['data']['worldData']['encounter']['characterRankings']['rankings']
 
-        # Get the source ID for the player
-        source_id = get_source_id(code, fight_id, access_token, name)
+        player_data = []
 
-        # Add the player data to the list
-        player_data.append({
-            "code": code,
-            "fight_id": fight_id,
-            "name": name,
-            "source_id": source_id
-        })
+        for entry in priest_rankings:
+            # Process each priest in some way, extracting required information
+            code = entry["report"]["code"]
+            fight_id = entry["report"]["fightID"]
+            name = entry["name"]
 
-    # Match the name and sourceID for each player
-    for entry in player_data:
-        name, source_id = get_source_id(entry["code"], entry["fight_id"], access_token, entry["name"])
+            # Get the source ID for the player
+            source_id = get_source_id(code, fight_id, name)
 
-        if name is not None and source_id is not None:
-            entry["source_id"] = source_id
-        else:
-            # Handle cases where the name or source ID is not found
-            print(f"Failed to retrieve source ID for {entry['code']}")
+            if source_id:
+                # Add the player data to the list
+                player_data.append({
+                    "code": code,
+                    "fight_id": fight_id,
+                    "name": name,
+                    "source_id": source_id
+                })
+            else:
+                logging.error(f"Failed to retrieve source ID for {code}")
 
-    # Export the player data to a CSV file for each player
-    for entry in player_data:
-        export_player_data(entry["fight_id"], entry["code"], entry["source_id"], access_token)
+        # Export the player data and process it
+        for entry in player_data:
+            # export_player_data(entry["fight_id"], entry["code"], entry["source_id"])
 
-    # Loop through each player's data and process it
-    for entry in player_data:
-        report_data_response = get_source_id(entry["fight_id"], entry["code"], entry["source_id"], access_token)
-        if "data" in report_data_response:
-            report_data = report_data_response["data"]["reportData"]["report"]["table"]
-            process_data_and_export(entry["name"], report_data) # Pass player's name to function
-        else:
-            print("No 'data' attribute found in the player data response.")
+            # Already have source_id from the earlier call, so we use it directly
+            report_data_response = oauth2_client.make_request(GRAPHQL_ENDPOINT, GET_PLAYER_DATA_QUERY.format(code=entry["code"], fightID=entry["fight_id"], sourceID=entry["source_id"]))
+
+            if "data" in report_data_response.json():
+                report_data = report_data_response.json()["data"]["reportData"]["report"]["table"]["data"]
+                process_data_and_export(entry["name"], report_data)  # Pass player's name to function
+            else:
+                logging.error(f"No 'data' attribute found in the report for {entry['code']}")
+    else:
+        logging.error(f"No 'data' attribute found in the response for top priests.")
+
+if __name__ == "__main__":
+    main()
