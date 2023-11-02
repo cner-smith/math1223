@@ -7,6 +7,9 @@ from datetime import timedelta
 
 logging.basicConfig(level=logging.ERROR)
 
+# Initialize a counter for the number of files written
+files_written_counter = 0
+
 
 def get_source_id(code, fight_id, name):
     query = GET_SOURCE_ID_QUERY.format(code=code, fightID=fight_id)
@@ -66,55 +69,49 @@ def modify_healing_done_data(healing_data):
 
 def modify_combatant_info_data(combatant_info):
     modified_combatant_info = []
-    for key, value in combatant_info.items():
-        modified_combatant_info.append({'info_key': key, 'info_value': value})
+    stats_data = combatant_info.get("stats", {})
+    for stat_key, stat_value in stats_data.items():
+        # Assuming the value could be in a format like {'min': x, 'max': y}, we'll default to 'min'
+        value_to_add = stat_value['min'] if isinstance(stat_value, dict) and 'min' in stat_value else stat_value
+        # Ensure the value is an integer
+        value_to_add = int(value_to_add)
+        modified_combatant_info.append({'info_key': stat_key, 'info_value': value_to_add})
     return modified_combatant_info
 
 
 def process_data_and_export(name, data):
-    # Extract and modify the required data
-    
-    total_time = str(timedelta(milliseconds=data.get('totalTime', 0))).split(", ")[-1]  # Convert milliseconds to a readable time format
+    global files_written_counter
 
-    combatant_info = data.get('combatantInfo', {})
-    combatant_info.pop('talents', None)  # Remove unwanted information after 'talents'
+    # Extract and modify the required data
+    total_time = str(timedelta(milliseconds=data.get('totalTime', 0))).split(", ")[-1]  # Convert milliseconds to a readable time format
 
     healers_count = sum(1 for player in data.get('composition', []) if player.get('specs') and 'healer' in player['specs'][0].get('role', '').lower())
 
     modified_healing_data = modify_healing_done_data(data.get('healingDone', []))
-    modified_combatant_info_data = modify_combatant_info_data(combatant_info)
-
+    modified_combatant_info_data = modify_combatant_info_data(data.get('combatantInfo', {}))
 
     # Write the modified data to a new CSV file named after the player's name
-    with open(f"{name}_modified.csv", "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=['total_time', 'combatant_info', 'healers_count', 'healing_done'])
+    with open(f"csv-output/{name}_modified.csv", "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=['total_time', 'healers_count', 'stats', 'total', 'ability', 'healing_done_total'])
         writer.writeheader()
 
-        # Write the extracted data to the CSV file
-        writer.writerow({
-            'total_time': total_time,
-            'combatant_info': json.dumps(combatant_info),
-            'healers_count': healers_count,
-            'healing_done': None  # Currently empty; will be written in the subsequent loop
-        })
+        # Concurrently write combatant info data and healing data
+        max_rows = max(len(modified_combatant_info_data), len(modified_healing_data))
+        for i in range(max_rows):
+            row_data = {
+                'total_time': total_time if i == 0 else None,  # Write only once
+                'healers_count': healers_count if i == 0 else None,  # Write only once
+                'stats': modified_combatant_info_data[i]['info_key'] if i < len(modified_combatant_info_data) else None,
+                'total': modified_combatant_info_data[i]['info_value'] if i < len(modified_combatant_info_data) else None,
+                'ability': modified_healing_data[i]['ability'] if i < len(modified_healing_data) else None,
+                'healing_done_total': modified_healing_data[i]['healing_amount'] if i < len(modified_healing_data) else None
+            }
+            writer.writerow(row_data)
 
-        # Write modified healing data as separate rows
-        for entry in modified_healing_data:
-            writer.writerow({
-                'total_time': None,
-                'combatant_info': None,
-                'healers_count': None,
-                'healing_done': json.dumps(entry)
-            })
+    files_written_counter += 1
+    print(f"Files Written ({files_written_counter}/100)")
 
-        # Write modified combatant info data as separate rows
-        for entry in modified_combatant_info_data:
-            writer.writerow({
-                'total_time': None,
-                'combatant_info': json.dumps(entry),
-                'healers_count': None,
-                'healing_done': None
-            })
+
 
 class OAuth2Client:
     def __init__(self, client_id, client_secret, authorization_url, access_token_url):
@@ -153,13 +150,17 @@ class OAuth2Client:
         response = requests.post(url, headers=headers, json={"query": query})
         return response
 
+with open('config.json', 'r') as f:
+    config_data = json.load(f)
+
 # Create an OAuth2 client
 oauth2_client = OAuth2Client(
-    client_id="9a80e66c-f50e-4bd1-9128-5760c7384f9d",
-    client_secret="n8RTGEGFrbxGl4SxoNR4NjWBeje96QYap8TH12Jb",
+    client_id=config_data["client_id"],
+    client_secret=config_data["client_secret"],
     authorization_url="https://www.warcraftlogs.com/oauth/authorize",
     access_token_url="https://www.warcraftlogs.com/oauth/token"
 )
+
 
 # Set the GraphQL endpoint
 GRAPHQL_ENDPOINT = "https://www.warcraftlogs.com/api/v2/client"
