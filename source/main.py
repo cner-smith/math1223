@@ -37,18 +37,15 @@ def export_player_data(fight_id, code, source_id, access_token):
         json={"query": GET_PLAYER_DATA_QUERY.format(code=code, fightID=fight_id, sourceID=source_id)}
     )
     player_data_response = json.loads(response.content)
-    print(player_data_response)
 
     if "data" in player_data_response:
         player_data = player_data_response["data"]["reportData"]["report"]["table"]["data"]
 
-        if isinstance(player_data, list) and player_data:  # Check if player_data is a non-empty list
+        if isinstance(player_data, dict) and player_data:  # Check if player_data is a non-empty dictionary
             with open(f"{code}.csv", "w", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(player_data[0].keys())  # Write header row
-
-                for row in player_data:
-                    writer.writerow(row.values())  # Write data rows
+                writer.writerow(player_data.keys())  # Write header row
+                writer.writerow(player_data.values())  # Write data rows
         else:
             print("Player data is empty or not in the expected format.")
     else:
