@@ -3,6 +3,9 @@ import json
 import csv
 import logging
 import datetime
+import os
+
+from typing import Union
 from datetime import timedelta
 
 logging.basicConfig(level=logging.ERROR)
@@ -11,7 +14,7 @@ logging.basicConfig(level=logging.ERROR)
 files_written_counter = 0
 
 
-def get_source_id(code, fight_id, name):
+def get_source_id(code: str, fight_id: str, name: str) -> Union[str, None]:
     query = GET_SOURCE_ID_QUERY.format(code=code, fightID=fight_id)
     response = oauth2_client.make_request(GRAPHQL_ENDPOINT, query)
     
@@ -36,7 +39,8 @@ def get_source_id(code, fight_id, name):
 
     return None  # Return None if data retrieval fails
 
-def export_player_data(fight_id, code, source_id):
+
+def export_player_data(fight_id: str, code: str, source_id: str) -> None:
     # Export the player's data to a CSV file
     query = GET_PLAYER_DATA_QUERY.format(code=code, fightID=fight_id, sourceID=source_id)
     response = oauth2_client.make_request(GRAPHQL_ENDPOINT, query)  # Using the OAuth2Client method
@@ -60,14 +64,16 @@ def export_player_data(fight_id, code, source_id):
     else:
         logging.error(f"No 'data' attribute found in the player data response.")
 
-def modify_healing_done_data(healing_data):
+
+def modify_healing_done_data(healing_data: str) -> list[dict[str, str]]:
     modified_healing_data = []
     for entry in healing_data:
         # Append each ability's healing and its amount as a separate row
         modified_healing_data.append({'ability': entry['name'], 'healing_amount': entry['total']})
     return modified_healing_data
 
-def modify_combatant_info_data(combatant_info):
+
+def modify_combatant_info_data(combatant_info: str) -> list[dict[str, str]]:
     modified_combatant_info = []
     stats_data = combatant_info.get("stats", {})
     for stat_key, stat_value in stats_data.items():
@@ -79,7 +85,7 @@ def modify_combatant_info_data(combatant_info):
     return modified_combatant_info
 
 
-def process_data_and_export(name, data):
+def process_data_and_export(name: str, data: str) -> None:
     global files_written_counter
 
     # Extract and modify the required data
@@ -89,6 +95,9 @@ def process_data_and_export(name, data):
 
     modified_healing_data = modify_healing_done_data(data.get('healingDone', []))
     modified_combatant_info_data = modify_combatant_info_data(data.get('combatantInfo', {}))
+
+    # Check if csv-output file exists, if not create it
+    os.makedirs("csv-output", exist_ok=True)
 
     # Write the modified data to a new CSV file named after the player's name
     with open(f"csv-output/{name}_modified.csv", "w", newline="") as f:
@@ -112,9 +121,8 @@ def process_data_and_export(name, data):
     print(f"Files Written ({files_written_counter}/100)")
 
 
-
 class OAuth2Client:
-    def __init__(self, client_id, client_secret, authorization_url, access_token_url):
+    def __init__(self, client_id: str, client_secret: str, authorization_url: str, access_token_url: str):
         self.client_id = client_id
         self.client_secret = client_secret
         self.authorization_url = authorization_url
@@ -123,7 +131,7 @@ class OAuth2Client:
         self.token_expiry = None
         self.get_access_token()
 
-    def get_access_token(self):
+    def get_access_token(self) -> Union[str, None]:
         if hasattr(self, 'access_token') and self.access_token and hasattr(self, 'token_expiry') and self.token_expiry and datetime.datetime.now() < self.token_expiry:
             return self.access_token
         
@@ -142,24 +150,12 @@ class OAuth2Client:
             logging.error(f"Failed to obtain access token.")
             return None
 
-
-    def make_request(self, url, query=''):
+    def make_request(self, url: str, query: str = ''):
         headers = {
             "Authorization": f"Bearer {self.access_token}"
         }
         response = requests.post(url, headers=headers, json={"query": query})
         return response
-
-with open('config.json', 'r') as f:
-    config_data = json.load(f)
-
-# Create an OAuth2 client
-oauth2_client = OAuth2Client(
-    client_id=config_data["client_id"],
-    client_secret=config_data["client_secret"],
-    authorization_url="https://www.warcraftlogs.com/oauth/authorize",
-    access_token_url="https://www.warcraftlogs.com/oauth/token"
-)
 
 
 # Set the GraphQL endpoint
@@ -201,7 +197,21 @@ query request {{
 }}
 """
 
+# TODO: consider transition to .env file instead of config.json file
+with open('config.json', 'r') as f:
+    config_data = json.load(f)
+
+# Create an OAuth2 client
+oauth2_client = OAuth2Client(
+    client_id=config_data["client_id"],
+    client_secret=config_data["client_secret"],
+    authorization_url="https://www.warcraftlogs.com/oauth/authorize",
+    access_token_url="https://www.warcraftlogs.com/oauth/token"
+)
+
+
 def main():
+
     access_token = oauth2_client.get_access_token()
 
     if not access_token:
@@ -255,6 +265,7 @@ def main():
                 logging.error(f"No 'data' attribute found in the report for {entry['code']}")
     else:
         logging.error(f"No 'data' attribute found in the response for top priests.")
+
 
 if __name__ == "__main__":
     main()

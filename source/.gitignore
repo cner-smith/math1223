@@ -1,5 +1,0 @@
-# Ignore configuration with secrets
-config.json
-
-# Ignore CSV directory
-csv-output/
