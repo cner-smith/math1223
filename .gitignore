@@ -1,0 +1,12 @@
+# Ignore configuration with secrets
+source/config.json
+
+# Ignore CSV directory
+csv-output/
+
+# Ignore python venvs
+.venv/
+venv/
+
+# Ignore PyCharm files
+.idea/
