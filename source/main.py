@@ -5,16 +5,15 @@ import logging
 import datetime
 import os
 
-from typing import Union
 from datetime import timedelta
-
+from requests import Response
 logging.basicConfig(level=logging.ERROR)
 
 # Initialize a counter for the number of files written
 files_written_counter = 0
 
 
-def get_source_id(code: str, fight_id: str, name: str) -> Union[str, None]:
+def get_source_id(code: str, fight_id: str, name: str) -> str:
     query = GET_SOURCE_ID_QUERY.format(code=code, fightID=fight_id)
     response = oauth2_client.make_request(GRAPHQL_ENDPOINT, query)
     
@@ -27,7 +26,8 @@ def get_source_id(code: str, fight_id: str, name: str) -> Union[str, None]:
                     if entry['name'] == name:
                         return entry['id']
                 logging.error(f"No matching player found for {name}")
-                return None  # Return None if player not found
+                # TODO: need to probably find/make an exception for data retrieve fails
+                raise  # Raise Error if data retrieval fails
             else:
                 logging.error(f"No 'composition' data in the response.")
         except Exception as e:
@@ -37,7 +37,7 @@ def get_source_id(code: str, fight_id: str, name: str) -> Union[str, None]:
     else:
         logging.error(f"Request failed with status code: {response.status_code}")
 
-    return None  # Return None if data retrieval fails
+    raise  # Return None if data retrieval fails
 
 
 def export_player_data(fight_id: str, code: str, source_id: str) -> None:
@@ -122,7 +122,7 @@ def process_data_and_export(name: str, data: str) -> None:
 
 
 class OAuth2Client:
-    def __init__(self, client_id: str, client_secret: str, authorization_url: str, access_token_url: str):
+    def __init__(self, client_id: str, client_secret: str, authorization_url: str, access_token_url: str) -> None:
         self.client_id = client_id
         self.client_secret = client_secret
         self.authorization_url = authorization_url
@@ -131,7 +131,7 @@ class OAuth2Client:
         self.token_expiry = None
         self.get_access_token()
 
-    def get_access_token(self) -> Union[str, None]:
+    def get_access_token(self) -> str:
         if hasattr(self, 'access_token') and self.access_token and hasattr(self, 'token_expiry') and self.token_expiry and datetime.datetime.now() < self.token_expiry:
             return self.access_token
         
@@ -148,9 +148,9 @@ class OAuth2Client:
             return self.access_token
         else:
             logging.error(f"Failed to obtain access token.")
-            return None
+            raise
 
-    def make_request(self, url: str, query: str = ''):
+    def make_request(self, url: str, query: str = '') -> Response:
         headers = {
             "Authorization": f"Bearer {self.access_token}"
         }
@@ -210,7 +210,7 @@ oauth2_client = OAuth2Client(
 )
 
 
-def main():
+def main() -> None:
 
     access_token = oauth2_client.get_access_token()
 
@@ -219,13 +219,11 @@ def main():
         return
 
     response = oauth2_client.make_request(GRAPHQL_ENDPOINT, GET_TOP_PRIESTS_QUERY)
-
     if response.status_code != 200:
         logging.error(f"Request for top priests data failed with status code: {response.status_code}")
         return
 
     top_priests_response = response.json()
-    
     if 'data' in top_priests_response:
         priest_rankings = top_priests_response['data']['worldData']['encounter']['characterRankings']['rankings']
 
