@@ -119,7 +119,7 @@ def process_data_and_export(name: str, data: str) -> None:
     global files_written_counter
 
     # Extract and modify the required data
-    total_time = str(timedelta(milliseconds=data.get('totalTime', 0))).split(", ")[-1]  # Convert milliseconds to a readable time format
+    total_time = data.get('totalTime', 0)
 
     healers_count = sum(1 for player in data.get('composition', []) if player.get('specs') and 'healer' in player['specs'][0].get('role', '').lower())
 
